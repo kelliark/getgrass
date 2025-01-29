@@ -78,6 +78,7 @@ The script will:
 - Assign new working proxies as needed
 
 ## Notes
+- Automatically detect how many proxies and will divide all the proxies for all the accounts.
 - You can run this bot at your own risk, I'm not responsible for any loss or damage caused by this bot.
 - This bot is for educational purposes only.
 
