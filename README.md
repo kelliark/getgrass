@@ -46,8 +46,15 @@ Enhanced multi-account farming bot for GetGrass.io with proxy support and automa
    git clone https://github.com/scindo07/getgrass.git
    cd getgrass
    ```
+2. Create and activate a virtual environment:
 
-2. Install packages
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
+   
+
+3. Install packages
    ```bash
    pip install -r requirements.txt
    ```
