@@ -143,6 +143,37 @@ class ProxyManager:
 
 proxy_manager = ProxyManager()
 
+class SessionPool:
+    def __init__(self):
+        self.sessions = {}
+        self.cache = {}
+        self.cache_ttl = 300  # 5 minutes cache TTL
+        self._lock = asyncio.Lock()
+
+    async def get_session(self, proxy):
+        async with self._lock:
+            if proxy not in self.sessions:
+                self.sessions[proxy] = aiohttp.ClientSession()
+            return self.sessions[proxy]
+
+    async def close_all(self):
+        for session in self.sessions.values():
+            await session.close()
+
+    def get_cached_response(self, url):
+        now = time.time()
+        if url in self.cache:
+            cached_time, response = self.cache[url]
+            if now - cached_time < self.cache_ttl:
+                return response
+            del self.cache[url]
+        return None
+
+    def cache_response(self, url, response):
+        self.cache[url] = (time.time(), response)
+
+session_pool = SessionPool()
+
 def format_log(message, proxy=None, device_id=None, action=None, data=None, color=Fore.WHITE):
     """Format log message in a clean and beautiful way"""
     timestamp = datetime.now().strftime("%H:%M:%S")
@@ -172,7 +203,9 @@ def format_log(message, proxy=None, device_id=None, action=None, data=None, colo
 
 async def connect_to_wss(socks5_proxy, user_id, mode):
     retry_count = 0
-    max_retries = 3  # Maximum number of proxy retries per connection
+    max_retries = 3
+    backoff_time = 1  # Start with 1 second backoff
+    
     
     while retry_count < max_retries:
         try:
@@ -184,6 +217,8 @@ async def connect_to_wss(socks5_proxy, user_id, mode):
             
             has_received_action = False
             is_authenticated = False
+            last_ping_time = 0
+            ping_interval = 60  # Increase ping interval to 60 seconds // you can change this the way you want
             
             while True:
                 try:
@@ -199,12 +234,8 @@ async def connect_to_wss(socks5_proxy, user_id, mode):
                     ssl_context.verify_mode = ssl.CERT_NONE
                     
                     urilist = [
-                        #"wss://proxy.wynd.network:4444/",
-                        #"wss://proxy.wynd.network:4650/",
                         "wss://proxy2.wynd.network:4444/",
-                        "wss://proxy2.wynd.network:4650/",
-                        #"wss://proxy3.wynd.network:4444/",
-                        #"wss://proxy3.wynd.network:4650/"
+                        "wss://proxy2.wynd.network:4650/"
                     ]
                     uri = random.choice(urilist)
                     server_hostname = "proxy.wynd.network"
@@ -213,18 +244,23 @@ async def connect_to_wss(socks5_proxy, user_id, mode):
                     async with proxy_connect(uri, proxy=proxy, ssl=ssl_context, server_hostname=server_hostname,
                                              extra_headers=custom_headers) as websocket:
                         async def send_ping():
+                           nonlocal last_ping_time
                             while True:
-                                if has_received_action:
-                                    send_message = json.dumps(
-                                        {"id": str(uuid.uuid5(uuid.NAMESPACE_DNS, socks5_proxy)), 
-                                         "version": "1.0.0", 
-                                         "action": "PING", 
-                                         "data": {}})
+                                current_time = time.time()
+                                if has_received_action and (current_time - last_ping_time) >= ping_interval:
+                                    send_message = json.dumps({
+                                        "id": str(uuid.uuid5(uuid.NAMESPACE_DNS, socks5_proxy)), 
+                                        "version": "1.0.0", 
+                                        "action": "PING", 
+                                        "data": {}
+                                    })
                                     
                                     print(format_log("SENDING PING", socks5_proxy, device_id, "PING", send_message, Fore.MAGENTA))
                                     
                                     await websocket.send(send_message)
                                     await websocket.ping()
+                                    last_ping_time = current_time
+                                await asyncio.sleep(5)
                                 await asyncio.sleep(5)
 
                         await asyncio.sleep(1)
@@ -264,34 +300,45 @@ async def connect_to_wss(socks5_proxy, user_id, mode):
                             elif message.get("action") in ["HTTP_REQUEST", "OPEN_TUNNEL"]:
                                 has_received_action = True
                                 request_data = message["data"]
+
+                                # Check cache first
+                                cached_response = session_pool.get_cached_response(request_data["url"])
+                                if cached_response:
+                                    print(format_log("USING CACHED RESPONSE", socks5_proxy, device_id, "CACHE_HIT", None, Fore.GREEN))
+                                    await websocket.send(json.dumps(cached_response))
+                                    continue
+                               
                                 
                                 headers = {
                                     "User-Agent": custom_headers["User-Agent"],
                                     "Content-Type": "application/json; charset=utf-8"
                                 }
                                 
-                                async with aiohttp.ClientSession() as session:
-                                    async with session.get(request_data["url"], headers=headers) as api_response:
-                                        content = await api_response.text()
-                                        encoded_body = base64.b64encode(content.encode()).decode()
-                                        
-                                        status_text = HTTP_STATUS_CODES.get(api_response.status, "")
-                                        
-                                        http_response = {
-                                            "id": message["id"],
-                                            "origin_action": message["action"],
-                                            "result": {
-                                                "url": request_data["url"],
-                                                "status": api_response.status,
-                                                "status_text": status_text,
-                                                "headers": dict(api_response.headers),
-                                                "body": encoded_body
-                                            }
+                                session = await session_pool.get_session(socks5_proxy)
+                                async with session.get(request_data["url"], headers=headers) as api_response:
+                                    content = await api_response.text()
+                                    encoded_body = base64.b64encode(content.encode()).decode()
+                                    
+                                    status_text = HTTP_STATUS_CODES.get(api_response.status, "")
+                                    
+                                    http_response = {
+                                        "id": message["id"],
+                                        "origin_action": message["action"],
+                                        "result": {
+                                            "url": request_data["url"],
+                                            "status": api_response.status,
+                                            "status_text": status_text,
+                                            "headers": dict(api_response.headers),
+                                            "body": encoded_body
                                         }
-                                        
-                                        print(format_log("OPENING PING ACCESS", socks5_proxy, device_id, "OPENING PING ACCESS", http_response, Fore.MAGENTA))
-                                        
-                                        await websocket.send(json.dumps(http_response))
+                                    }
+                                    
+                                    # Cache successful responses
+                                    if api_response.status == 200:
+                                        session_pool.cache_response(request_data["url"], http_response)
+                                    
+                                    print(format_log("OPENING PING ACCESS", socks5_proxy, device_id, "OPENING PING ACCESS", http_response, Fore.MAGENTA))
+                                    await websocket.send(json.dumps(http_response))
 
                             elif message.get("action") == "PONG":
                                 pong_response = {"id": message["id"], "origin_action": "PONG"}
@@ -313,12 +360,16 @@ async def connect_to_wss(socks5_proxy, user_id, mode):
                         if new_proxy:
                             socks5_proxy = new_proxy
                             retry_count += 1
+                            backoff_time *= 2  # Exponential backoff
+                            await asyncio.sleep(backoff_time)
                             continue
                         else:
                             print(format_log(f"No more proxies available for user {user_id}", None, None, "ERROR", None, Fore.RED))
                             break
                     
                     await asyncio.sleep(5)
+                    await asyncio.sleep(backoff_time)
+                    backoff_time = min(backoff_time * 2, 60)  # Cap backoff at 60 seconds
                     
         except Exception as e:
             error_msg = str(e)
@@ -333,93 +384,99 @@ async def connect_to_wss(socks5_proxy, user_id, mode):
                 if new_proxy:
                     socks5_proxy = new_proxy
                     retry_count += 1
+                    backoff_time *= 2
+                    await asyncio.sleep(backoff_time)
                     continue
                 else:
                     print(format_log(f"No more proxies available for user {user_id}", None, None, "ERROR", None, Fore.RED))
                     break
             
-            await asyncio.sleep(5)
+            await asyncio.sleep(backoff_time)
+            backoff_time = min(backoff_time * 2, 60)
             
     return None
 
 async def main():
-    print(f"{Fore.CYAN}{BANNER}{Style.RESET_ALL}")
-    print(f"{Fore.CYAN}Kelliark | GetGrass Farmer V2 - Multi Account{Style.RESET_ALL}")
-    
-    global proxy_manager
-    proxy_manager = ProxyManager()
-    
-    print(f"{Fore.GREEN}Select Mode:{Style.RESET_ALL}")
-    print("1. Extension Mode - Recommended")
-    print("2. Desktop Mode - Unavailable")
-    
-    while True:
-        mode_choice = input("Enter your choice (1/2): ").strip()
-        if mode_choice in ['1', '2']:
-            break
-        print(f"{Fore.RED}Invalid choice. Please enter 1 or 2.{Style.RESET_ALL}")
-    
-    mode = "extension" if mode_choice == "1" else "desktop"
-    print(f"{Fore.GREEN}Selected mode: {mode}{Style.RESET_ALL}")
-    
-    # Read user IDs from uid.txt
     try:
-        with open('uid.txt', 'r') as file:
-            user_ids = [line.strip() for line in file.readlines() if line.strip()]
-    except FileNotFoundError:
-        print(f"{Fore.RED}Error: uid.txt not found. Please create it with one user ID per line.{Style.RESET_ALL}")
-        return
-    
-    if not user_ids:
-        print(f"{Fore.RED}Error: No user IDs found in uid.txt{Style.RESET_ALL}")
-        return
-    
-    print(f"{Fore.YELLOW}Found {len(user_ids)} accounts in uid.txt{Style.RESET_ALL}")
-    
-    # Read proxies
-    try:
-        with open('proxy.txt', 'r') as file:
-            all_proxies = [line.strip() for line in file.readlines() if line.strip()]
-    except FileNotFoundError:
-        print(f"{Fore.RED}Error: proxy.txt not found{Style.RESET_ALL}")
-        return
-    
-    if not all_proxies:
-        print(f"{Fore.RED}Error: No proxies found in proxy.txt{Style.RESET_ALL}")
-        return
-    
-    print(f"{Fore.YELLOW}Total available proxies: {len(all_proxies)}{Style.RESET_ALL}")
-    
-    while True:
+        print(f"{Fore.CYAN}{BANNER}{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}Kelliark | GetGrass Farmer V2 - Multi Account{Style.RESET_ALL}")
+        
+        global proxy_manager
+        proxy_manager = ProxyManager()
+        
+        print(f"{Fore.GREEN}Select Mode:{Style.RESET_ALL}")
+        print("1. Extension Mode - Recommended")
+        print("2. Desktop Mode - Unavailable")
+        
+        while True:
+            mode_choice = input("Enter your choice (1/2): ").strip()
+            if mode_choice in ['1', '2']:
+                break
+            print(f"{Fore.RED}Invalid choice. Please enter 1 or 2.{Style.RESET_ALL}")
+        
+        mode = "extension" if mode_choice == "1" else "desktop"
+        print(f"{Fore.GREEN}Selected mode: {mode}{Style.RESET_ALL}")
+        
+        # Read user IDs from uid.txt
         try:
-            proxies_per_account = int(input(f'Enter number of proxies per account (max {len(all_proxies) // len(user_ids)}): '))
-            if proxies_per_account <= 0:
-                print(f"{Fore.RED}Please enter a positive number{Style.RESET_ALL}")
-                continue
-            if proxies_per_account * len(user_ids) > len(all_proxies):
-                print(f"{Fore.RED}Not enough proxies. Maximum allowed: {len(all_proxies) // len(user_ids)} per account{Style.RESET_ALL}")
-                continue
-            break
-        except ValueError:
-            print(f"{Fore.RED}Please enter a valid number{Style.RESET_ALL}")
-    
-    # Distribute proxies among accounts
-    tasks = []
-    proxy_index = 0
-    
-    for user_id in user_ids:
-        # Get proxies for this account
-        account_proxies = all_proxies[proxy_index:proxy_index + proxies_per_account]
-        proxy_index += proxies_per_account
+            with open('uid.txt', 'r') as file:
+                user_ids = [line.strip() for line in file.readlines() if line.strip()]
+        except FileNotFoundError:
+            print(f"{Fore.RED}Error: uid.txt not found. Please create it with one user ID per line.{Style.RESET_ALL}")
+            return
         
-        print(f"{Fore.GREEN}Starting {proxies_per_account} instances for account: {user_id}{Style.RESET_ALL}")
+        if not user_ids:
+            print(f"{Fore.RED}Error: No user IDs found in uid.txt{Style.RESET_ALL}")
+            return
         
-        # Create tasks for this account
-        account_tasks = [asyncio.ensure_future(connect_to_wss(proxy, user_id, mode)) 
-                        for proxy in account_proxies]
-        tasks.extend(account_tasks)
-    
-    await asyncio.gather(*tasks)
+        print(f"{Fore.YELLOW}Found {len(user_ids)} accounts in uid.txt{Style.RESET_ALL}")
+        
+        # Read proxies
+        try:
+            with open('proxy.txt', 'r') as file:
+                all_proxies = [line.strip() for line in file.readlines() if line.strip()]
+        except FileNotFoundError:
+            print(f"{Fore.RED}Error: proxy.txt not found{Style.RESET_ALL}")
+            return
+        
+        if not all_proxies:
+            print(f"{Fore.RED}Error: No proxies found in proxy.txt{Style.RESET_ALL}")
+            return
+        
+        print(f"{Fore.YELLOW}Total available proxies: {len(all_proxies)}{Style.RESET_ALL}")
+        
+        while True:
+            try:
+                proxies_per_account = int(input(f'Enter number of proxies per account (max {len(all_proxies) // len(user_ids)}): '))
+                if proxies_per_account <= 0:
+                    print(f"{Fore.RED}Please enter a positive number{Style.RESET_ALL}")
+                    continue
+                if proxies_per_account * len(user_ids) > len(all_proxies):
+                    print(f"{Fore.RED}Not enough proxies. Maximum allowed: {len(all_proxies) // len(user_ids)} per account{Style.RESET_ALL}")
+                    continue
+                break
+            except ValueError:
+                print(f"{Fore.RED}Please enter a valid number{Style.RESET_ALL}")
+        
+        # Distribute proxies among accounts
+        tasks = []
+        proxy_index = 0
+        
+        for user_id in user_ids:
+            # Get proxies for this account
+            account_proxies = all_proxies[proxy_index:proxy_index + proxies_per_account]
+            proxy_index += proxies_per_account
+            
+            print(f"{Fore.GREEN}Starting {proxies_per_account} instances for account: {user_id}{Style.RESET_ALL}")
+            
+            # Create tasks for this account
+            account_tasks = [asyncio.ensure_future(connect_to_wss(proxy, user_id, mode)) 
+                            for proxy in account_proxies]
+            tasks.extend(account_tasks)
+        
+        await asyncio.gather(*tasks)
+    finally:
+        await session_pool.close_all()
 
 if __name__ == '__main__':
     asyncio.run(main())
