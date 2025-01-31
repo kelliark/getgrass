@@ -4,6 +4,13 @@ Enhanced multi-account farming bot for GetGrass.io with proxy support and automa
 
 > ⚠️ **Desktop mode is still in Development. Please use Extension mode!**
 
+## 🚀 Latest Updates (January 31, 2025)
+
+- Added Sessionpool
+- Improved proxy handling and error recovery
+- Optimized connection stability
+- Increased ping interval to 60 seconds for better performance // ypu can change this in line *219*
+
 ## Features
 * Multi-Account Support
 * Automatic Proxy Management & Rotation
@@ -14,16 +21,18 @@ Enhanced multi-account farming bot for GetGrass.io with proxy support and automa
 * Failed Proxy Detection & Auto-Replacement
 
 ## Requirements
-1. GetGrass.io Account UserID ([Register Here](https://app.getgrass.io))
-2. Proxies (ISP Proxies Recommended)
+1. GetGrass.io Account UserID ([GetGrass Dashboard](https://app.getgrass.io))
+2. Proxies
 3. VPS or RDP (OPTIONAL)
 4. Python 3.10 or Later
 5. Required packages:
 
 ## Proxy Setup
 ### Recommended Proxy Providers
-- Premium ISP Proxies (Recommended):
+- ISP Proxies
   * [Proxiesfo](https://app.proxies.fo/ref/208a608a-0dbf-13c3-7651-7f5303fc5cb2)
+- Residential Proxies
+  * [Nstp](https://app.nstproxy.com/register?i=42Um5k)
 
 ## Getting Started
 
@@ -39,6 +48,7 @@ Enhanced multi-account farming bot for GetGrass.io with proxy support and automa
    localStorage.getItem('userId')
    ```
 5. Copy your UserID (without the quotes)
+6. If you get an error after pasting allow pasting try type it and then enter and just go to step number 4
 
 ### 2. Setup Bot
 1. Clone the repository:
@@ -50,7 +60,7 @@ Enhanced multi-account farming bot for GetGrass.io with proxy support and automa
 
    ```bash
    python3 -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   venv\Scripts\activate
    ```
    
 
