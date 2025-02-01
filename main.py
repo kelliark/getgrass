@@ -244,7 +244,7 @@ async def connect_to_wss(socks5_proxy, user_id, mode):
                     async with proxy_connect(uri, proxy=proxy, ssl=ssl_context, server_hostname=server_hostname,
                                              extra_headers=custom_headers) as websocket:
                         async def send_ping():
-                           nonlocal last_ping_time
+                            nonlocal last_ping_time
                             while True:
                                 current_time = time.time()
                                 if has_received_action and (current_time - last_ping_time) >= ping_interval:
@@ -260,7 +260,6 @@ async def connect_to_wss(socks5_proxy, user_id, mode):
                                     await websocket.send(send_message)
                                     await websocket.ping()
                                     last_ping_time = current_time
-                                await asyncio.sleep(5)
                                 await asyncio.sleep(5)
 
                         await asyncio.sleep(1)
