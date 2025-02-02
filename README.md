@@ -78,9 +78,18 @@ Enhanced multi-account farming bot for GetGrass.io with proxy support and automa
    ```
 
 ## Run bot
+
+- First option
 ```bash
 python main.py
 ```
+
+- Second option
+```bash
+python noremoveproxy_main.py
+```
+
+// as it name suggest, the first one is gonna remove dead proxies while the second one don't
 
 The script will:
 - Automatically manage and rotate proxies
