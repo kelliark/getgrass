@@ -9,7 +9,7 @@ Enhanced multi-account farming bot for GetGrass.io with proxy support and automa
 - Added Sessionpool
 - Improved proxy handling and error recovery
 - Optimized connection stability
-- Increased ping interval to 60 seconds for better performance // you can change this in line *219*
+- Increased ping interval to 60 seconds for better performance // you can change this in line *221* for main.py while line *220* for noremoveproxy_main.py
 
 ## Features
 * Multi-Account Support
