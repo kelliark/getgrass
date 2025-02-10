@@ -53,7 +53,7 @@ Enhanced multi-account farming bot for GetGrass.io with proxy support and automa
 ### 2. Setup Bot
 1. Clone the repository:
    ```bash
-   git clone https://github.com/scindo07/getgrass.git
+   git clone https://github.com/kelliark/getgrass.git
    cd getgrass
    ```
 2. Create and activate a virtual environment:
